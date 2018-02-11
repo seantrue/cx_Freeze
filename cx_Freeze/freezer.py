@@ -148,6 +148,12 @@ class Freezer(object):
         self.zipIncludePackages = list(zipIncludePackages)
         self.zipExcludePackages = list(zipExcludePackages)
         self._VerifyConfiguration()
+    def is_system(self, filePath):
+        prefixes = ["/System","/Library","/usr/lib"]
+        for prefix in prefixes:
+            if filePath.startswith(prefix):
+                return True
+        return False
 
     def _AddVersionResource(self, exe):
         try:
@@ -168,6 +174,8 @@ class Freezer(object):
 
     def _CopyFile(self, source, target, copyDependentFiles,
             includeMode = False):
+        if self.is_system(source):
+            return
         normalizedSource = os.path.normcase(os.path.normpath(source))
         normalizedTarget = os.path.normcase(os.path.normpath(target))
         if normalizedTarget in self.filesCopied:
@@ -187,8 +195,9 @@ class Freezer(object):
         if copyDependentFiles \
                 and source not in self.finder.excludeDependentFiles:
             for source in self._GetDependentFiles(source):
-                target = os.path.join(targetDir, os.path.basename(source))
-                self._CopyFile(source, target, copyDependentFiles)
+                if not self.is_system(source):
+                    target = os.path.join(targetDir, os.path.basename(source))
+                    self._CopyFile(source, target, copyDependentFiles)
 
     def _CreateDirectory(self, path):
         if not os.path.isdir(path):

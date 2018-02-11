@@ -89,6 +89,7 @@ class bdist_mac(Command):
             '--deep option.'),
         ('codesign-resource-rules', None, 'Plist file to be passed to ' \
             'codesign\'s --resource-rules option.'),
+        ('rpath-lib-folder', None, 'replace @rpath with given folder for any files')
     ]
 
     def initialize_options(self):
@@ -101,6 +102,7 @@ class bdist_mac(Command):
         self.codesign_entitlements = None
         self.codesign_deep = None
         self.codesign_resource_rules = None
+        self.rpath_lib_folder = None
 
     def finalize_options(self):
         self.include_frameworks = normalize_to_list(self.include_frameworks)
@@ -123,22 +125,66 @@ class bdist_mac(Command):
         plistlib.writePlist(contents, plist)
         plist.close()
 
+    def is_binexe(self, filePath):
+        badext = [".pyc",".zip"".afm",".jpg",".png",".txt",".ttf"]
+        for ext in badext:
+            if filePath.endswith(ext):
+                return False
+        if os.path.isdir(filePath):
+            return False
+        file_info = subprocess.Popen(("file", filePath), stdout=subprocess.PIPE)
+        file_info = "\n".join(file_info.stdout.readlines())
+        return "Mach-O" in file_info
+    def is_system(self, filePath):
+        prefixes = ["/System","/Library","/usr/lib","/DLC"]
+        for prefix in prefixes:
+            if filePath.startswith(prefix):
+                return True
+        return False
+    def get_references(self, filePath):
+        otool = subprocess.Popen(('otool', '-L', filePath),
+                                     stdout=subprocess.PIPE)
+
+        references = otool.stdout.readlines()[1:]
+        references = [ref.decode().strip().split()[0] for ref in references]
+        references = [r for r in references if not r.startswith("@executable") and not r.startswith("@loader")]
+        references = [r for r in references if "(" not in r]
+        references = [r for r in references if not self.is_system(r)]
+        return references
+
     def setRelativeReferencePaths(self):
         """ For all files in Contents/MacOS, check if they are binaries
             with references to other files in that dir. If so, make those
             references relative. The appropriate commands are applied to all
             files; they will just fail for files on which they do not apply."""
+
+        # files will contain a list of all binaries path relative to self.binDir
         files = []
         for root, dirs, dir_files in os.walk(self.binDir):
-            files.extend([os.path.join(root, f).replace(self.binDir + "/", "")
-                          for f in dir_files])
+            for name in dir_files:
+                if self.is_binexe(os.path.join(root,name)):
+                    files.append(os.path.join(root, name).replace(self.binDir + "/", ""))
+
+        # files will contain self.binDir relative paths for all non-system dependencies
+        toscan = set(files)
+        scanned = set([])
+        while toscan-scanned:
+            for path in toscan-scanned:
+                refs = self.get_references(os.path.join(self.binDir,path))
+                scanned.add(path)
+                for ref in refs:
+                    _, name = os.path.split(ref)
+                    if name not in toscan:
+                        try:
+                            self.copy_file(ref, os.path.join(self.binDir, name))
+                            toscan.add(name)
+                        except Exception, e:
+                            print("issue copying {} to {} error {} skipping".format(name, os.path.join(self.binDir, name), e))
+        files = list(sorted(toscan))
+
+        # For every binExe in self.binDir, make references local.
         for fileName in files:
-
-            # install_name_tool can't handle zip files or directories
             filePath = os.path.join(self.binDir, fileName)
-            if fileName.endswith('.zip'):
-                continue
-
             # ensure write permissions
             mode = os.stat(filePath).st_mode
             if not (mode & stat.S_IWUSR):
@@ -147,39 +193,11 @@ class bdist_mac(Command):
             # let the file itself know its place
             subprocess.call(('install_name_tool', '-id',
                              '@executable_path/' + fileName, filePath))
-
-            # find the references: call otool -L on the file
-            otool = subprocess.Popen(('otool', '-L', filePath),
-                                     stdout=subprocess.PIPE)
-            references = otool.stdout.readlines()[1:]
-
-            for reference in references:
-
-                # find the actual referenced file name
-                referencedFile = reference.decode().strip().split()[0]
-
-                if referencedFile.startswith('@executable_path'):
-                    # the referencedFile is already a relative path (to the executable)
-                    continue
-
+            references = self.get_references(filePath)
+            for referencedFile in references:
                 path, name = os.path.split(referencedFile)
-
-                #some referenced files have not previously been copied to the
-                #executable directory - the assumption is that you don't need
-                #to copy anything fro /usr or /System, just from folders like
-                #/opt this fix should probably be elsewhere though
-                if (name not in files and not path.startswith('/usr') and not
-                        path.startswith('/System')):
-                    print(referencedFile)
-                    self.copy_file(referencedFile,
-                                   os.path.join(self.binDir, name))
-                    files.append(name)
-
-                # see if we provide the referenced file;
-                # if so, change the reference
-                if name in files:
-                    newReference = '@executable_path/' + name
-                    subprocess.call(('install_name_tool', '-change',
+                newReference = '@executable_path/' + name
+                subprocess.call(('install_name_tool', '-change',
                                     referencedFile, newReference, filePath))
 
     def find_qt_menu_nib(self):
