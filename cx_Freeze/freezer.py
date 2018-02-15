@@ -148,8 +148,14 @@ class Freezer(object):
         self.zipIncludePackages = list(zipIncludePackages)
         self.zipExcludePackages = list(zipExcludePackages)
         self._VerifyConfiguration()
-    def is_system(self, filePath):
-        prefixes = ["/System","/Library","/usr/lib"]
+
+    def _IsSystem(self, filePath):
+        if sys.platform == "win32":
+            return False
+        elif sys.platform == "darwin":
+            prefixes = ["/System","/Library","/usr/lib","/lib"]
+        else:
+            prefixes = ["/lib","/lib64","lib32","/usr/lib","/usr/lib32","/usr/lib64"]
         for prefix in prefixes:
             if filePath.startswith(prefix):
                 return True
@@ -174,7 +180,7 @@ class Freezer(object):
 
     def _CopyFile(self, source, target, copyDependentFiles,
             includeMode = False):
-        if self.is_system(source):
+        if self._IsSystem(source):
             return
         normalizedSource = os.path.normcase(os.path.normpath(source))
         normalizedTarget = os.path.normcase(os.path.normpath(target))
@@ -195,7 +201,7 @@ class Freezer(object):
         if copyDependentFiles \
                 and source not in self.finder.excludeDependentFiles:
             for source in self._GetDependentFiles(source):
-                if not self.is_system(source):
+                if not self._IsSystem(source):
                     target = os.path.join(targetDir, os.path.basename(source))
                     self._CopyFile(source, target, copyDependentFiles)
 

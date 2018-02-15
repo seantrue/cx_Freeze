@@ -135,7 +135,9 @@ class bdist_mac(Command):
         file_info = subprocess.Popen(("file", filePath), stdout=subprocess.PIPE)
         file_info = "\n".join(file_info.stdout.readlines())
         return "Mach-O" in file_info
+
     def is_system(self, filePath):
+        # TODO: Thread this definition back to arguments
         prefixes = ["/System","/Library","/usr/lib","/DLC"]
         for prefix in prefixes:
             if filePath.startswith(prefix):
